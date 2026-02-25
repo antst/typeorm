@@ -717,6 +717,14 @@ export abstract class QueryBuilder<Entity extends ObjectLiteral> {
 
             const replacements: { [key: string]: string } = {}
 
+            // For CTI children, track which property names map to inherited columns
+            // so they can be routed through the parent table alias
+            const inheritedPropertyNames: Set<string> | undefined =
+                alias.metadata.isCtiChild &&
+                alias.metadata.inheritedColumns.length > 0
+                    ? new Set<string>()
+                    : undefined
+
             // Insert & overwrite the replacements from least to most relevant in our replacements object.
             // To do this we iterate and overwrite in the order of relevance.
             // Least to Most Relevant:
@@ -746,15 +754,40 @@ export abstract class QueryBuilder<Entity extends ObjectLiteral> {
 
             for (const column of alias.metadata.columns) {
                 replacements[column.databaseName] = column.databaseName
+                if (
+                    inheritedPropertyNames &&
+                    alias.metadata.inheritedColumns.includes(column)
+                ) {
+                    inheritedPropertyNames.add(column.databaseName)
+                }
             }
 
             for (const column of alias.metadata.columns) {
                 replacements[column.propertyName] = column.databaseName
+                if (
+                    inheritedPropertyNames &&
+                    alias.metadata.inheritedColumns.includes(column)
+                ) {
+                    inheritedPropertyNames.add(column.propertyName)
+                }
             }
 
             for (const column of alias.metadata.columns) {
                 replacements[column.propertyPath] = column.databaseName
+                if (
+                    inheritedPropertyNames &&
+                    alias.metadata.inheritedColumns.includes(column)
+                ) {
+                    inheritedPropertyNames.add(column.propertyPath)
+                }
             }
+
+            // For CTI children, compute the parent alias prefix for inherited columns
+            const ctiParentAliasPrefix =
+                inheritedPropertyNames &&
+                this.expressionMap.aliasNamePrefixingEnabled
+                    ? `${this.escape(alias.name + "__cti_parent")}.`
+                    : undefined
 
             statement = statement.replace(
                 new RegExp(
@@ -770,7 +803,13 @@ export abstract class QueryBuilder<Entity extends ObjectLiteral> {
                 ),
                 (match, pre, p) => {
                     if (replacements[p]) {
-                        return `${pre}${replacementAliasNamePrefix}${this.escape(
+                        // For CTI children, inherited columns use the parent table alias
+                        const prefix =
+                            ctiParentAliasPrefix &&
+                            inheritedPropertyNames!.has(p)
+                                ? ctiParentAliasPrefix
+                                : replacementAliasNamePrefix
+                        return `${pre}${prefix}${this.escape(
                             replacements[p],
                         )}`
                     }
