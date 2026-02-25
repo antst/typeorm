@@ -83,11 +83,12 @@ export class EntityPersistExecutor {
 
                         let metadata = this.connection.getMetadata(entityTarget)
 
-                        // Check for single table inheritance and find the correct metadata in that case.
+                        // Check for table inheritance and find the correct metadata in that case.
                         // Goal is to use the correct discriminator as we could have a repository
                         // for an (abstract) base class and thus the target would not match.
                         if (
-                            metadata.inheritancePattern === "STI" &&
+                            (metadata.inheritancePattern === "STI" ||
+                                metadata.inheritancePattern === "CTI") &&
                             metadata.childEntityMetadatas.length > 0
                         ) {
                             const matchingChildMetadata =
