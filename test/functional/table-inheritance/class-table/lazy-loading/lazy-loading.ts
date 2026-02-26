@@ -56,7 +56,7 @@ describe("table-inheritance > class-table > lazy-loading", () => {
                 // The profile property should be a thenable (Promise-like)
                 const profilePromise = loaded!.profile
                 expect(profilePromise).to.not.be.undefined
-                expect(typeof (profilePromise as any).then).to.equal(
+                expect(typeof profilePromise.then).to.equal(
                     "function",
                 )
 
@@ -96,7 +96,7 @@ describe("table-inheritance > class-table > lazy-loading", () => {
                 // The license property should be a thenable (Promise-like)
                 const licensePromise = loaded!.license
                 expect(licensePromise).to.not.be.undefined
-                expect(typeof (licensePromise as any).then).to.equal(
+                expect(typeof licensePromise.then).to.equal(
                     "function",
                 )
 
@@ -141,7 +141,7 @@ describe("table-inheritance > class-table > lazy-loading", () => {
 
                 // The profile property should be a thenable (lazy), not a plain object
                 const profileProp = loaded!.profile
-                expect(typeof (profileProp as any).then).to.equal("function")
+                expect(typeof profileProp.then).to.equal("function")
 
                 // Only after awaiting should we get the actual Profile data
                 const resolved = await profileProp
@@ -306,13 +306,13 @@ describe("table-inheritance > class-table > lazy-loading", () => {
                 const loadedUser = await connection
                     .getRepository(User)
                     .findOneBy({ id: user.id })
-                expect((loadedUser as any).license).to.be.undefined
+                expect("license" in loadedUser!).to.be.false
 
                 // Load Organization — should not have profile property
                 const loadedOrg = await connection
                     .getRepository(Organization)
                     .findOneBy({ id: org.id })
-                expect((loadedOrg as any).profile).to.be.undefined
+                expect("profile" in loadedOrg!).to.be.false
             }),
         ))
 })

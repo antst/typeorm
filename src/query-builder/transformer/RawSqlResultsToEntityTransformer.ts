@@ -217,11 +217,39 @@ export class RawSqlResultsToEntityTransformer {
             )
                 return
 
+            // For CTI parent queries where metadata resolved to a child type,
+            // child-specific columns are aliased with the child table alias
+            // (e.g., "Actor__cti_child_User") to avoid collisions between
+            // same-named columns across different child tables.
+            // Columns defined on the queried entity or its ancestors use the
+            // main alias; columns from child entities use the child alias.
+            let columnAliasName = alias.name
+            if (alias.metadata.isCtiParent && metadata.isCtiChild) {
+                const columnTarget = column.target as Function
+                const isMainColumn =
+                    columnTarget === alias.metadata.target ||
+                    alias.metadata.ctiAncestorChain.some(
+                        (a) => a.target === columnTarget,
+                    )
+                if (!isMainColumn) {
+                    const owningChild =
+                        alias.metadata.childEntityMetadatas.find(
+                            (cm) => cm.target === columnTarget,
+                        )
+                    columnAliasName = owningChild
+                        ? alias.name +
+                          "__cti_child_" +
+                          owningChild.targetName
+                        : alias.name +
+                          "__cti_child_" +
+                          metadata.targetName
+                }
+            }
             const value =
                 rawResults[0][
                     DriverUtils.buildAlias(
                         this.driver,
-                        alias.name,
+                        columnAliasName,
                         column.databaseName,
                     )
                 ]

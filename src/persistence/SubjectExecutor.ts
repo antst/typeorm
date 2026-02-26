@@ -781,7 +781,10 @@ export class SubjectExecutor {
         let firstIdentifier: ObjectLiteral | undefined
         let mergedGeneratedMap: ObjectLiteral = {}
 
-        // Insert into each ancestor table, root-first
+        // Insert into each ancestor table, root-first.
+        // Always use updateEntity(true) for ancestor inserts so the generated PK
+        // is available in insertResult.identifiers/generatedMaps for propagation
+        // to subsequent child inserts, even when the caller sets reload=false.
         for (let i = ancestorChain.length - 1; i >= 0; i--) {
             const ancestorMetadata = ancestorChain[i]
             const insertResult = await this.queryRunner.manager
@@ -789,7 +792,7 @@ export class SubjectExecutor {
                 .insert()
                 .into(ancestorMetadata.target)
                 .values(valueSet)
-                .updateEntity(reload)
+                .updateEntity(true)
                 .callListeners(false)
                 .execute()
 

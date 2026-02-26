@@ -3087,7 +3087,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                         selection: selectionPath,
                         aliasName: DriverUtils.buildAlias(
                             this.connection.driver,
-                            aliasName,
+                            childAlias,
                             column.databaseName,
                         ),
                         virtual: hasMainAlias,
@@ -3901,12 +3901,22 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
             for (const relation of childEagerRelations) {
                 loadPromises.push(
                     (async () => {
+                        // Build a queryBuilder that carries the current queryRunner
+                        // so follow-up queries stay within the same transaction context.
+                        const relationAlias =
+                            relation.inverseEntityMetadata.targetName
+                        const childQb = this.createQueryBuilder()
+                            .select(relationAlias)
+                            .from(
+                                relation.inverseEntityMetadata.target,
+                                relationAlias,
+                            )
                         const relatedGroups =
                             await this.connection.relationIdLoader.loadManyToManyRelationIdsAndGroup(
                                 relation,
                                 childEntities,
                                 undefined,
-                                undefined,
+                                childQb,
                             )
                         for (const entity of childEntities) {
                             const group = relatedGroups.find(
