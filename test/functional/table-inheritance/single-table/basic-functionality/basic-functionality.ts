@@ -73,11 +73,11 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     .orderBy("students.id")
                     .getMany()
 
-                loadedStudents[0].should.have.all.keys("id", "name", "faculty")
+                loadedStudents[0].should.have.all.keys("id", "name", "faculty", "type")
                 loadedStudents[0].id.should.equal(1)
                 loadedStudents[0].name.should.equal("Alice")
                 loadedStudents[0].faculty.should.equal("Economics")
-                loadedStudents[1].should.have.all.keys("id", "name", "faculty")
+                loadedStudents[1].should.have.all.keys("id", "name", "faculty", "type")
                 loadedStudents[1].id.should.equal(2)
                 loadedStudents[1].name.should.equal("Bob")
                 loadedStudents[1].faculty.should.equal("Programming")
@@ -92,6 +92,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "specialization",
                     "salary",
+                    "type",
                 )
                 loadedTeachers[0].id.should.equal(3)
                 loadedTeachers[0].name.should.equal("Mr. Garrison")
@@ -102,6 +103,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "specialization",
                     "salary",
+                    "type",
                 )
                 loadedTeachers[1].id.should.equal(4)
                 loadedTeachers[1].name.should.equal("Mr. Adler")
@@ -118,6 +120,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "department",
                     "salary",
+                    "type",
                 )
                 loadedAccountants[0].id.should.equal(5)
                 loadedAccountants[0].name.should.equal("Mr. Burns")
@@ -128,6 +131,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "department",
                     "salary",
+                    "type",
                 )
                 loadedAccountants[1].id.should.equal(6)
                 loadedAccountants[1].name.should.equal("Mr. Trump")
@@ -151,7 +155,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     .where("student.name = :name", { name: "Bob" })
                     .getOne()
 
-                loadedStudent!.should.have.all.keys("id", "name", "faculty")
+                loadedStudent!.should.have.all.keys("id", "name", "faculty", "type")
                 loadedStudent!.id.should.equal(2)
                 loadedStudent!.name.should.equal("Bob")
                 loadedStudent!.faculty.should.equal("Chemistry")
@@ -174,6 +178,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "specialization",
                     "salary",
+                    "type",
                 )
                 loadedTeacher!.id.should.equal(4)
                 loadedTeacher!.name.should.equal("Mr. Adler")
@@ -200,6 +205,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "department",
                     "salary",
+                    "type",
                 )
                 loadedAccountant!.id.should.equal(6)
                 loadedAccountant!.name.should.equal("Mr. Trump")
@@ -218,7 +224,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     .getMany()
 
                 loadedStudents.length.should.equal(1)
-                loadedStudents[0].should.have.all.keys("id", "name", "faculty")
+                loadedStudents[0].should.have.all.keys("id", "name", "faculty", "type")
                 loadedStudents[0].id.should.equal(1)
                 loadedStudents[0].name.should.equal("Alice")
                 loadedStudents[0].faculty.should.equal("Economics")
@@ -236,6 +242,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "specialization",
                     "salary",
+                    "type",
                 )
                 loadedTeachers[0].id.should.equal(3)
                 loadedTeachers[0].name.should.equal("Mr. Garrison")
@@ -257,6 +264,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "department",
                     "salary",
+                    "type",
                 )
                 loadedAccountants[0].id.should.equal(5)
                 loadedAccountants[0].name.should.equal("Mr. Burns")
@@ -277,6 +285,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "salary",
                     "specialization",
+                    "type",
                 )
                 loadedEmployees[0].should.be.instanceof(Teacher)
                 loadedEmployees[0].id.should.equal(3)
@@ -288,6 +297,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "salary",
                     "department",
+                    "type",
                 )
                 loadedEmployees[1].should.be.instanceof(Accountant)
                 loadedEmployees[1].id.should.equal(5)
@@ -300,7 +310,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     .orderBy("persons.id")
                     .getMany()
 
-                loadedPersons[0].should.have.all.keys("id", "name", "faculty")
+                loadedPersons[0].should.have.all.keys("id", "name", "faculty", "type")
                 loadedPersons[0].should.be.instanceof(Student)
                 loadedPersons[0].id.should.equal(1)
                 loadedPersons[0].name.should.equal("Alice")
@@ -310,6 +320,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "salary",
                     "specialization",
+                    "type",
                 )
                 loadedPersons[1].should.be.instanceof(Teacher)
                 loadedPersons[1].id.should.equal(3)
@@ -321,6 +332,7 @@ describe("table-inheritance > single-table > basic-functionality", () => {
                     "name",
                     "salary",
                     "department",
+                    "type",
                 )
                 loadedPersons[2].should.be.instanceof(Accountant)
                 loadedPersons[2].id.should.equal(5)
