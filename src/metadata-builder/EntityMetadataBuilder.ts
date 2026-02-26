@@ -430,6 +430,12 @@ export class EntityMetadataBuilder {
             })
         })
 
+        // Build CTI caches as the very last step, after all
+        // computeEntityMetadataStep2() calls are complete.
+        entityMetadatas.forEach((entityMetadata) => {
+            entityMetadata.buildCtiCaches()
+        })
+
         return entityMetadatas
     }
 

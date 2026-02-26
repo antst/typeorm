@@ -46,8 +46,22 @@ export class RawSqlResultsToEntityTransformer {
     transform(rawResults: any[], alias: Alias): any[] {
         const group = this.group(rawResults, alias)
         const entities: any[] = []
+
+        // Build discriminator value → child metadata map once for O(1) lookups
+        let discriminatorMap: Map<any, EntityMetadata> | undefined
+        if (alias.metadata.discriminatorColumn) {
+            discriminatorMap = new Map()
+            for (const child of alias.metadata.childEntityMetadatas) {
+                discriminatorMap.set(child.discriminatorValue, child)
+            }
+        }
+
         group.forEach((results) => {
-            const entity = this.transformRawResultsGroup(results, alias)
+            const entity = this.transformRawResultsGroup(
+                results,
+                alias,
+                discriminatorMap,
+            )
             if (
                 entity !== undefined &&
                 !Object.values(entity).every((value) => value === null)
@@ -121,32 +135,46 @@ export class RawSqlResultsToEntityTransformer {
     protected transformRawResultsGroup(
         rawResults: any[],
         alias: Alias,
+        discriminatorMap?: Map<any, EntityMetadata>,
     ): ObjectLiteral | undefined {
         // let hasColumns = false; // , hasEmbeddedColumns = false, hasParentColumns = false, hasParentEmbeddedColumns = false;
         let metadata = alias.metadata
 
         if (metadata.discriminatorColumn) {
-            const discriminatorValues = rawResults.map(
-                (result) =>
-                    result[
-                        DriverUtils.buildAlias(
-                            this.driver,
-                            alias.name,
-                            alias.metadata.discriminatorColumn!.databaseName,
-                        )
-                    ],
+            const aliasedColumnName = DriverUtils.buildAlias(
+                this.driver,
+                alias.name,
+                alias.metadata.discriminatorColumn!.databaseName,
             )
-            const discriminatorMetadata = metadata.childEntityMetadatas.find(
-                (childEntityMetadata) => {
-                    return (
-                        typeof discriminatorValues.find(
-                            (value) =>
-                                value ===
-                                childEntityMetadata.discriminatorValue,
-                        ) !== "undefined"
+            // Find discriminator value from raw results
+            let discriminatorMetadata: EntityMetadata | undefined
+            if (discriminatorMap) {
+                // O(1) lookup using pre-built map
+                for (const result of rawResults) {
+                    const value = result[aliasedColumnName]
+                    if (value !== undefined && value !== null) {
+                        discriminatorMetadata = discriminatorMap.get(value)
+                        if (discriminatorMetadata) break
+                    }
+                }
+            } else {
+                // Fallback for direct calls without map
+                const discriminatorValues = rawResults.map(
+                    (result) => result[aliasedColumnName],
+                )
+                discriminatorMetadata =
+                    metadata.childEntityMetadatas.find(
+                        (childEntityMetadata) => {
+                            return (
+                                typeof discriminatorValues.find(
+                                    (value) =>
+                                        value ===
+                                        childEntityMetadata.discriminatorValue,
+                                ) !== "undefined"
+                            )
+                        },
                     )
-                },
-            )
+            }
             if (discriminatorMetadata) metadata = discriminatorMetadata
         }
         let entity: any = metadata.create(this.queryRunner, {
@@ -268,7 +296,11 @@ export class RawSqlResultsToEntityTransformer {
                 ]
             if (
                 value === undefined ||
-                (column.isVirtual && !column.isDiscriminator)
+                (column.isVirtual &&
+                    !(
+                        column.isDiscriminator &&
+                        column.entityMetadata.inheritancePattern === "CTI"
+                    ))
             )
                 return
 
