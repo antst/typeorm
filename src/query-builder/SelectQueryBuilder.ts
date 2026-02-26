@@ -2428,7 +2428,8 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                         if (
                             relation.inverseEntityMetadata.tableType ===
                                 "entity-child" &&
-                            relation.inverseEntityMetadata.discriminatorColumn
+                            relation.inverseEntityMetadata.discriminatorColumn &&
+                            !relation.inverseEntityMetadata.isCtiChild
                         ) {
                             appendedCondition +=
                                 " AND " +
@@ -2565,9 +2566,12 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
             }
         })
 
-        // For any joined entity that is a CTI child, also inject INNER JOINs to its ancestor tables
+        // For any joined entity that is a CTI child, also inject JOINs to its ancestor tables
         // so that inherited columns can be accessed through the ancestor aliases.
         // Supports multi-level: joined CTI child chains up to its root.
+        // The join type matches the relation join direction: LEFT JOINed relations get
+        // LEFT JOINs to ancestors (so nullable relations don't eliminate rows), while
+        // INNER JOINed relations get INNER JOINs.
         let joinedCtiParentSql = ""
         for (const joinAttr of this.expressionMap.joinAttributes) {
             if (!joinAttr.alias.hasMetadata) continue
@@ -2575,6 +2579,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
             if (!joinedMetadata.isCtiChild) continue
 
             const joinedAlias = joinAttr.alias.name
+            const joinDirection = joinAttr.direction === "LEFT" ? "LEFT" : "INNER"
             const ancestorChain = joinedMetadata.ctiAncestorChain
             let prevAlias = joinedAlias
             for (let i = 0; i < ancestorChain.length; i++) {
@@ -2608,7 +2613,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                     .join(" AND ")
 
                 joinedCtiParentSql +=
-                    " INNER JOIN " +
+                    ` ${joinDirection} JOIN ` +
                     ancestorTable +
                     " " +
                     this.escape(ancestorAlias) +
