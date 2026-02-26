@@ -46,15 +46,19 @@ import { FindOperator } from "../find-options/FindOperator"
 import { ApplyValueTransformers } from "../util/ApplyValueTransformers"
 
 /**
- * Returns the alias name for a CTI ancestor at the given depth.
- * Level 0 (immediate parent): "base__cti_parent"
- * Level 1 (grandparent): "base__cti_parent2"
- * Level N: "base__cti_parent{N+1}"
+ * Returns the alias name for a CTI ancestor at the given depth,
+ * respecting driver maxAliasLength limits via DriverUtils.buildAlias.
  */
-function ctiAncestorAlias(baseAlias: string, level: number): string {
-    return level === 0
-        ? `${baseAlias}__cti_parent`
-        : `${baseAlias}__cti_parent${level + 1}`
+function ctiAncestorAlias(
+    driver: { maxAliasLength?: number },
+    baseAlias: string,
+    level: number,
+): string {
+    return DriverUtils.buildCtiAncestorAlias(
+        driver as import("../driver/Driver").Driver,
+        baseAlias,
+        level,
+    )
 }
 
 /**
@@ -2278,7 +2282,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                 let prevAlias = mainAlias
                 for (let i = 0; i < ancestorChain.length; i++) {
                     const ancestorMetadata = ancestorChain[i]
-                    const ancestorAlias = ctiAncestorAlias(mainAlias, i)
+                    const ancestorAlias = ctiAncestorAlias(this.connection.driver, mainAlias, i)
                     const ancestorTable = this.getTableName(
                         ancestorMetadata.tablePath,
                     )
@@ -2323,7 +2327,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
             if (metadata.isCtiParent) {
                 for (const childMetadata of metadata.childEntityMetadatas) {
                     const childAlias =
-                        mainAlias + "__cti_child_" + childMetadata.targetName
+                        DriverUtils.buildCtiChildAlias(this.connection.driver, mainAlias, childMetadata.targetName)
                     const childTable = this.getTableName(
                         childMetadata.tablePath,
                     )
@@ -2584,7 +2588,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
             let prevAlias = joinedAlias
             for (let i = 0; i < ancestorChain.length; i++) {
                 const ancestorMetadata = ancestorChain[i]
-                const ancestorAlias = ctiAncestorAlias(joinedAlias, i)
+                const ancestorAlias = ctiAncestorAlias(this.connection.driver, joinedAlias, i)
                 const ancestorTable = this.getTableName(
                     ancestorMetadata.tablePath,
                 )
@@ -2972,7 +2976,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
             for (let i = 0; i < chain.length; i++) {
                 ctiAncestorAliasMap.set(
                     chain[i],
-                    this.escape(ctiAncestorAlias(aliasName, i)),
+                    this.escape(ctiAncestorAlias(this.connection.driver, aliasName, i)),
                 )
             }
         }
@@ -3066,7 +3070,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
         if (metadata.isCtiParent) {
             for (const childMetadata of metadata.childEntityMetadatas) {
                 const childAlias =
-                    aliasName + "__cti_child_" + childMetadata.targetName
+                    DriverUtils.buildCtiChildAlias(this.connection.driver, aliasName, childMetadata.targetName)
                 const escapedChildAlias = this.escape(childAlias)
 
                 // Get child-specific columns (exclude inherited ones which are on the parent table)
