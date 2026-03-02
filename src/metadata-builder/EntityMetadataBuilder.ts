@@ -20,6 +20,7 @@ import { CheckMetadata } from "../metadata/CheckMetadata"
 import { ExclusionMetadata } from "../metadata/ExclusionMetadata"
 import { TypeORMError } from "../error"
 import { DriverUtils } from "../driver/DriverUtils"
+import { ForeignKeyMetadata } from "../metadata/ForeignKeyMetadata"
 
 /**
  * Builds EntityMetadata objects and all its sub-metadatas.
@@ -439,12 +440,12 @@ export class EntityMetadataBuilder {
                 const fk = new ForeignKeyMetadata({
                     entityMetadata,
                     referencedEntityMetadata: parent,
-                    namingStrategy: this.dataSource.namingStrategy,
+                    namingStrategy: this.connection.namingStrategy,
                     columns: entityMetadata.primaryColumns,
                     referencedColumns: parent.primaryColumns,
                     onDelete: "CASCADE",
                 })
-                fk.build(this.dataSource.namingStrategy)
+                fk.build(this.connection.namingStrategy)
                 entityMetadata.foreignKeys.push(fk)
             })
 
