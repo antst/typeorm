@@ -1309,6 +1309,7 @@ export class EntityManager {
      * @see https://stackoverflow.com/a/5972738/925151
      */
     async clear<Entity>(entityClass: EntityTarget<Entity>): Promise<void> {
+        this.rejectCtiChild(entityClass, "clear")
         const metadata = this.connection.getMetadata(entityClass)
         const queryRunner =
             this.queryRunner || this.connection.createQueryRunner()
@@ -1328,6 +1329,7 @@ export class EntityManager {
         propertyPath: string,
         value: number | string,
     ): Promise<UpdateResult> {
+        this.rejectCtiChild(entityClass, "increment")
         const metadata = this.connection.getMetadata(entityClass)
         const column = metadata.findColumnWithPropertyPath(propertyPath)
         if (!column)
@@ -1365,6 +1367,7 @@ export class EntityManager {
         propertyPath: string,
         value: number | string,
     ): Promise<UpdateResult> {
+        this.rejectCtiChild(entityClass, "decrement")
         const metadata = this.connection.getMetadata(entityClass)
         const column = metadata.findColumnWithPropertyPath(propertyPath)
         if (!column)
