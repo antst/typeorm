@@ -590,6 +590,19 @@ export class EntityMetadataBuilder {
             entityMetadata.target,
         )
 
+        // For CTI children, indexes/uniques/checks defined on parent classes
+        // should stay on the parent table only (each CTI entity has its own table).
+        // For STI, all share one table, so the full inheritanceTree is correct.
+        const indexInheritanceTree =
+            entityMetadata.isCtiChild && entityMetadata.parentEntityMetadata
+                ? entityMetadata.inheritanceTree.filter(
+                      (target) =>
+                          !entityMetadata.parentEntityMetadata.inheritanceTree.includes(
+                              target,
+                          ),
+                  )
+                : entityMetadata.inheritanceTree
+
         const discriminatorValue =
             this.metadataArgsStorage.findDiscriminatorValue(
                 entityMetadata.target,
@@ -886,7 +899,7 @@ export class EntityMetadataBuilder {
                 })
             })
         entityMetadata.checks = this.metadataArgsStorage
-            .filterChecks(entityMetadata.inheritanceTree)
+            .filterChecks(indexInheritanceTree)
             .map((args) => {
                 return new CheckMetadata({ entityMetadata, args })
             })
@@ -894,7 +907,7 @@ export class EntityMetadataBuilder {
         // Only PostgreSQL supports exclusion constraints.
         if (this.connection.driver.options.type === "postgres") {
             entityMetadata.exclusions = this.metadataArgsStorage
-                .filterExclusions(entityMetadata.inheritanceTree)
+                .filterExclusions(indexInheritanceTree)
                 .map((args) => {
                     return new ExclusionMetadata({ entityMetadata, args })
                 })
@@ -902,14 +915,14 @@ export class EntityMetadataBuilder {
 
         if (this.connection.driver.options.type === "cockroachdb") {
             entityMetadata.ownIndices = this.metadataArgsStorage
-                .filterIndices(entityMetadata.inheritanceTree)
+                .filterIndices(indexInheritanceTree)
                 .filter((args) => !args.unique)
                 .map((args) => {
                     return new IndexMetadata({ entityMetadata, args })
                 })
 
             const uniques = this.metadataArgsStorage
-                .filterIndices(entityMetadata.inheritanceTree)
+                .filterIndices(indexInheritanceTree)
                 .filter((args) => args.unique)
                 .map((args) => {
                     return new UniqueMetadata({
@@ -924,7 +937,7 @@ export class EntityMetadataBuilder {
             entityMetadata.ownUniques.push(...uniques)
         } else {
             entityMetadata.ownIndices = this.metadataArgsStorage
-                .filterIndices(entityMetadata.inheritanceTree)
+                .filterIndices(indexInheritanceTree)
                 .map((args) => {
                     return new IndexMetadata({ entityMetadata, args })
                 })
@@ -938,7 +951,7 @@ export class EntityMetadataBuilder {
             this.connection.driver.options.type === "spanner"
         ) {
             const indices = this.metadataArgsStorage
-                .filterUniques(entityMetadata.inheritanceTree)
+                .filterUniques(indexInheritanceTree)
                 .map((args) => {
                     return new IndexMetadata({
                         entityMetadata: entityMetadata,
@@ -954,7 +967,7 @@ export class EntityMetadataBuilder {
             entityMetadata.ownIndices.push(...indices)
         } else {
             const uniques = this.metadataArgsStorage
-                .filterUniques(entityMetadata.inheritanceTree)
+                .filterUniques(indexInheritanceTree)
                 .map((args) => {
                     return new UniqueMetadata({ entityMetadata, args })
                 })
