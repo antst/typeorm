@@ -20,26 +20,6 @@ jobs:
       - run: npm ci
 
       - name: Build package
-        run: |
-          # Compile TypeScript (outputs to build/compiled/)
-          npm run compile
-          # Assemble flat package structure (replicates gulp package)
-          mkdir -p build/package
-          cp -r build/compiled/src/* build/package/
-          # Remove /// <reference types="node|chai" /> from .d.ts files
-          find build/package -name '*.d.ts' -exec sed -i 's|/// <reference types="node" />||g; s|/// <reference types="chai" />||g' {} +
-          # Generate ESM index (replicates gulp packageCreateEsmIndex)
-          node -e "
-            const cjs = require('./build/package/index.js');
-            const keys = Object.keys(cjs).filter(k => k !== 'default' && !k.startsWith('__'));
-            const mjs = 'import TypeORM from \"./index.js\";\n'
-              + 'const {\n    ' + keys.join(',\n    ') + '\n} = TypeORM;\n'
-              + 'export {\n    ' + keys.join(',\n    ') + '\n};\n'
-              + 'export default TypeORM;\n';
-            require('fs').writeFileSync('./build/package/index.mjs', mjs, 'utf8');
-          "
-          # Copy package metadata
-          cp package.json build/package/
-          cp README.md build/package/
+        run: npm run package
 
       - run: npx pkg-pr-new publish './build/package' --publicize

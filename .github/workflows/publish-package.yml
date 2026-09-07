@@ -1,0 +1,32 @@
+name: Publish Package to npmjs
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v0.3.13-cti.*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      - name: Build package
+        run: npm run package
+
+      - name: Publish package
+        working-directory: build/package
+        run: npm publish --access public --tag cti
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
