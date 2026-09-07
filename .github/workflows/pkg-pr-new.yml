@@ -1,6 +1,7 @@
 name: Publish Preview Package
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - fix/sti-child-relation-scoping-0.3.13
