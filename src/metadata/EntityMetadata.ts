@@ -72,6 +72,29 @@ export class EntityMetadata {
     inheritanceTree: Function[] = []
 
     /**
+     * Columns inherited from the parent entity in CTI (Class Table Inheritance).
+     * These columns physically live in the parent table but are referenced by
+     * the child for query building purposes.
+     */
+    inheritedColumns: ColumnMetadata[] = []
+
+    /**
+     * Relations inherited from the parent entity in CTI.
+     * These relations have join columns in the parent table.
+     */
+    inheritedRelations: RelationMetadata[] = []
+
+    /**
+     * Cached CTI computation results. Populated by buildCtiCaches() which
+     * must be called after all computeEntityMetadataStep2() calls are complete.
+     */
+    private _isCtiChild: boolean | undefined
+    private _isCtiParent: boolean | undefined
+    private _ctiAncestorChain: EntityMetadata[] | undefined
+    private _tableColumns: ColumnMetadata[] | undefined
+    private _inheritedColumnsSet: Set<ColumnMetadata> | undefined
+
+    /**
      * Table type. Tables can be closure, junction, etc.
      */
     tableType: TableType = "regular"
@@ -169,7 +192,7 @@ export class EntityMetadata {
      * If this entity metadata's table using one of the inheritance patterns,
      * then this will contain what pattern it uses.
      */
-    inheritancePattern?: "STI" /*|"CTI"*/
+    inheritancePattern?: "STI" | "CTI"
 
     /**
      * Checks if there any non-nullable column exist in this entity.
@@ -533,7 +556,7 @@ export class EntityMetadata {
     constructor(options: {
         connection: DataSource
         inheritanceTree?: Function[]
-        inheritancePattern?: "STI" /*|"CTI"*/
+        inheritancePattern?: "STI" | "CTI"
         tableTree?: TreeMetadataArgs
         parentClosureEntityMetadata?: EntityMetadata
         args: TableMetadataArgs
@@ -552,6 +575,133 @@ export class EntityMetadata {
         this.expression = this.tableMetadataArgs.expression
         this.withoutRowid = this.tableMetadataArgs.withoutRowid
         this.dependsOn = this.tableMetadataArgs.dependsOn
+    }
+
+    // -------------------------------------------------------------------------
+    // Computed Inheritance Helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * True if this is a CTI child entity (has its own table, joined to parent).
+     * For multi-level CTI (A → B → C), walks up the parent chain to find the root's pattern.
+     * Result is cached after buildCtiCaches() is called.
+     */
+    get isCtiChild(): boolean {
+        if (this._isCtiChild !== undefined) return this._isCtiChild
+        return this._computeIsCtiChild()
+    }
+
+    /**
+     * True if this is an STI child entity (shares parent's table).
+     */
+    get isStiChild(): boolean {
+        if (this.tableType !== "entity-child") return false
+        let ancestor = this.parentEntityMetadata
+        while (ancestor) {
+            if (ancestor.inheritancePattern === "STI") return true
+            if (ancestor.inheritancePattern === "CTI") return false
+            ancestor = ancestor.parentEntityMetadata
+        }
+        return false
+    }
+
+    /**
+     * True if this is a CTI parent entity with child tables.
+     * Covers both the root (@TableInheritance pattern="CTI") and mid-level entities
+     * that are themselves CTI children with their own CTI children.
+     * Result is cached after buildCtiCaches() is called.
+     */
+    get isCtiParent(): boolean {
+        if (this._isCtiParent !== undefined) return this._isCtiParent
+        return this._computeIsCtiParent()
+    }
+
+    /**
+     * Returns the ordered CTI ancestor chain from immediate parent to root.
+     * For 2-level (User → Actor): [Actor]
+     * For 3-level (User → Contributor → Actor): [Contributor, Actor]
+     * Returns empty array for non-CTI children.
+     * Result is cached after buildCtiCaches() is called.
+     */
+    get ctiAncestorChain(): EntityMetadata[] {
+        if (this._ctiAncestorChain !== undefined) return this._ctiAncestorChain
+        return this._computeCtiAncestorChain()
+    }
+
+    /**
+     * Returns columns that physically belong to this entity's database table.
+     * For CTI children this excludes inherited columns (which live on the parent table).
+     * For all other entities this is the same as `columns`.
+     * Result is cached after buildCtiCaches() is called.
+     */
+    get tableColumns(): ColumnMetadata[] {
+        if (this._tableColumns !== undefined) return this._tableColumns
+        return this._computeTableColumns()
+    }
+
+    /**
+     * Set of inherited columns for O(1) membership testing.
+     * Available after buildCtiCaches() is called, falls back to
+     * creating a new Set on each access otherwise.
+     */
+    get inheritedColumnsSet(): Set<ColumnMetadata> {
+        if (this._inheritedColumnsSet !== undefined)
+            return this._inheritedColumnsSet
+        return new Set(this.inheritedColumns)
+    }
+
+    /**
+     * Populates all CTI caches. Must be called exactly once, after all
+     * computeEntityMetadataStep2() calls are complete (i.e., as the very
+     * last step in EntityMetadataBuilder.build()).
+     */
+    buildCtiCaches(): void {
+        this._isCtiChild = this._computeIsCtiChild()
+        this._isCtiParent = this._computeIsCtiParent()
+        this._ctiAncestorChain = this._computeCtiAncestorChain()
+        this._inheritedColumnsSet = new Set(this.inheritedColumns)
+        this._tableColumns = this._computeTableColumns()
+    }
+
+    private _computeIsCtiChild(): boolean {
+        if (this.tableType !== "entity-child") return false
+        let ancestor = this.parentEntityMetadata
+        while (ancestor) {
+            if (ancestor.inheritancePattern === "CTI") return true
+            if (ancestor.inheritancePattern === "STI") return false
+            ancestor = ancestor.parentEntityMetadata
+        }
+        return false
+    }
+
+    private _computeIsCtiParent(): boolean {
+        if (this.childEntityMetadatas.length === 0) return false
+        if (this.inheritancePattern === "CTI") return true
+        if (this.isCtiChild) return true
+        return false
+    }
+
+    private _computeCtiAncestorChain(): EntityMetadata[] {
+        if (!this.isCtiChild) return []
+        const chain: EntityMetadata[] = []
+        let ancestor = this.parentEntityMetadata
+        while (ancestor) {
+            chain.push(ancestor)
+            if (ancestor.isCtiChild) {
+                ancestor = ancestor.parentEntityMetadata
+            } else {
+                break
+            }
+        }
+        return chain
+    }
+
+    private _computeTableColumns(): ColumnMetadata[] {
+        if (this.isCtiChild && this.inheritedColumns.length > 0) {
+            const set = this.inheritedColumnsSet
+            return this.columns.filter((c) => !set.has(c))
+        }
+        return this.columns
     }
 
     // -------------------------------------------------------------------------
@@ -991,7 +1141,8 @@ export class EntityMetadata {
         }
         this.givenTableName =
             this.tableMetadataArgs.type === "entity-child" &&
-            this.parentEntityMetadata
+            this.parentEntityMetadata &&
+            this.isStiChild
                 ? this.parentEntityMetadata.givenTableName
                 : this.tableMetadataArgs.name
         this.synchronize =
@@ -1005,7 +1156,8 @@ export class EntityMetadata {
                 namingStrategy.closureJunctionTableName(this.givenTableName!)
         } else if (
             this.tableMetadataArgs.type === "entity-child" &&
-            this.parentEntityMetadata
+            this.parentEntityMetadata &&
+            this.isStiChild
         ) {
             this.tableNameWithoutPrefix = namingStrategy.tableName(
                 this.parentEntityMetadata.targetName,
@@ -1119,7 +1271,7 @@ export class EntityMetadata {
      * it means we cannot execute bulk inserts in some cases.
      */
     getInsertionReturningColumns(): ColumnMetadata[] {
-        return this.columns.filter((column) => {
+        return this.tableColumns.filter((column) => {
             return (
                 column.default !== undefined ||
                 column.isGenerated ||

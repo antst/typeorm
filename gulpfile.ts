@@ -125,7 +125,7 @@ export class Gulpfile {
     packagePack() {
         return gulp.src("package.json", { read: false })
             .pipe(shell([
-                "cd ./build/package && npm pack && mv -f typeorm-*.tgz .."
+                "cd ./build/package && npm pack && mv -f alkemio-typeorm-*.tgz .."
             ]));
     }
 
@@ -163,11 +163,11 @@ export class Gulpfile {
     }
 
     /**
-     * Moves all compiled files to the final package directory.
+     * Copies compiled source files into the flat package directory.
      */
     @Task()
     packageMoveCompiledFiles() {
-        return gulp.src("./build/package/src/**/*")
+        return gulp.src("./build/compiled/src/**/*")
             .pipe(gulp.dest("./build/package"));
     }
 
@@ -211,13 +211,39 @@ export class Gulpfile {
     }
 
     /**
-     * Change the "private" state of the packaged package.json file to public.
+     * Writes the public fork metadata to the packaged package.json file.
+     * The repository package.json intentionally keeps the upstream identity so
+     * local development and source imports continue to use "typeorm".
      */
     @Task()
-    packagePreparePackageFile() {
-        return gulp.src("./package.json")
-            .pipe(replace("\"private\": true,", "\"private\": false,"))
-            .pipe(gulp.dest("./build/package"));
+    async packagePreparePackageFile() {
+        const packageFile = JSON.parse(await fs.promises.readFile("./package.json", "utf8"));
+
+        packageFile.name = "@alkemio/typeorm";
+        packageFile.version = "0.3.13-cti.1";
+        packageFile.bin = Object.fromEntries(
+            Object.entries(packageFile.bin).map(([name, target]: [string, string]) => [
+                name,
+                target.replace(/^\.\//, ""),
+            ]),
+        );
+        packageFile.scripts.watch = "tsc -w";
+        packageFile.repository = {
+            type: "git",
+            url: "git+https://github.com/antst/typeorm.git",
+        };
+        packageFile.bugs = {
+            url: "https://github.com/antst/typeorm/issues",
+        };
+        packageFile.homepage = "https://github.com/antst/typeorm#readme";
+        packageFile.publishConfig = {
+            access: "public",
+        };
+
+        await fs.promises.writeFile(
+            "./build/package/package.json",
+            `${JSON.stringify(packageFile, undefined, 2)}\n`,
+        );
     }
 
     /**
@@ -226,7 +252,6 @@ export class Gulpfile {
     @Task()
     packageCopyReadme() {
         return gulp.src("./README.md")
-            .pipe(replace(/```typescript([\s\S]*?)```/g, "```javascript$1```"))
             .pipe(gulp.dest("./build/package"));
     }
 
@@ -245,18 +270,13 @@ export class Gulpfile {
     @SequenceTask()
     package() {
         return [
-            "clean",
-            ["browserCopySources", "browserCopyTemplates"],
-            ["packageCompile", "browserCompile"],
+            "compile",
             "packageMoveCompiledFiles",
             "packageCreateEsmIndex",
             [
-                "browserClearPackageDirectory",
-                "packageClearPackageDirectory",
                 "packageReplaceReferences",
                 "packagePreparePackageFile",
                 "packageCopyReadme",
-                "packageCopyShims"
             ],
         ];
     }

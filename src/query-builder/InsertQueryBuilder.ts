@@ -646,8 +646,17 @@ export class InsertQueryBuilder<
     protected getInsertedColumns(): ColumnMetadata[] {
         if (!this.expressionMap.mainAlias!.hasMetadata) return []
 
-        return this.expressionMap.mainAlias!.metadata.columns.filter(
+        const metadata = this.expressionMap.mainAlias!.metadata
+        return metadata.columns.filter(
             (column) => {
+                // For CTI children, skip inherited columns (they belong to the parent table)
+                if (
+                    metadata.isCtiChild &&
+                    metadata.inheritedColumnsSet.has(column)
+                ) {
+                    return false
+                }
+
                 // if user specified list of columns he wants to insert to, then we filter only them
                 if (this.expressionMap.insertColumns.length)
                     return (
@@ -663,9 +672,11 @@ export class InsertQueryBuilder<
 
                 // if user did not specified such list then return all columns except auto-increment one
                 // for Oracle we return auto-increment column as well because Oracle does not support DEFAULT VALUES expression
+                // For CTI children, never skip auto-increment PK — it must be explicitly provided from the parent table
                 if (
                     column.isGenerated &&
                     column.generationStrategy === "increment" &&
+                    !metadata.isCtiChild &&
                     !(this.connection.driver.options.type === "spanner") &&
                     !(this.connection.driver.options.type === "oracle") &&
                     !DriverUtils.isSQLiteFamily(this.connection.driver) &&
@@ -775,9 +786,13 @@ export class InsertQueryBuilder<
                         //     const subQuery = `(SELECT c.max + 2 FROM (SELECT MAX(${rightColumnName}) as max from ${tableName}) c)`;
                         //     expression += subQuery;
                     } else if (column.isDiscriminator) {
+                        // Use provided value if available (needed for CTI parent inserts
+                        // where child's discriminator value must be written to parent table)
                         expression += this.createParameter(
-                            this.expressionMap.mainAlias!.metadata
-                                .discriminatorValue,
+                            value !== undefined
+                                ? value
+                                : this.expressionMap.mainAlias!.metadata
+                                      .discriminatorValue,
                         )
                         // return "1";
 

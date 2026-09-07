@@ -46,6 +46,22 @@ import { FindOperator } from "../find-options/FindOperator"
 import { ApplyValueTransformers } from "../util/ApplyValueTransformers"
 
 /**
+ * Returns the alias name for a CTI ancestor at the given depth,
+ * respecting driver maxAliasLength limits via DriverUtils.buildAlias.
+ */
+function ctiAncestorAlias(
+    driver: { maxAliasLength?: number },
+    baseAlias: string,
+    level: number,
+): string {
+    return DriverUtils.buildCtiAncestorAlias(
+        driver as import("../driver/Driver").Driver,
+        baseAlias,
+        level,
+    )
+}
+
+/**
  * Allows to build complex sql queries in a fashion way and execute those queries.
  */
 export class SelectQueryBuilder<Entity extends ObjectLiteral>
@@ -2249,6 +2265,132 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
         // qb.select("category")
         //     .leftJoinAndSelect("category.post", "post");
 
+        // For CTI, inject auto-JOINs to related tables in the inheritance hierarchy.
+        // CTI child → INNER JOIN each ancestor table (inherited columns) — supports multi-level.
+        // CTI parent → LEFT JOIN each child table (child-specific columns for polymorphic queries).
+        let ctiJoinSql = ""
+        if (this.expressionMap.mainAlias?.hasMetadata) {
+            const metadata = this.expressionMap.mainAlias.metadata
+            const mainAlias = this.expressionMap.mainAlias.name
+
+            if (metadata.isCtiChild) {
+                // CTI child: chain INNER JOINs to each ancestor table.
+                // For User → Contributor → Actor:
+                //   INNER JOIN contributor __cti_parent ON contributor.id = user.id
+                //   INNER JOIN actor __cti_parent2 ON actor.id = contributor.id
+                const ancestorChain = metadata.ctiAncestorChain
+                let prevAlias = mainAlias
+                for (let i = 0; i < ancestorChain.length; i++) {
+                    const ancestorMetadata = ancestorChain[i]
+                    const ancestorAlias = ctiAncestorAlias(this.connection.driver, mainAlias, i)
+                    const ancestorTable = this.getTableName(
+                        ancestorMetadata.tablePath,
+                    )
+
+                    const prevMetadata =
+                        i === 0 ? metadata : ancestorChain[i - 1]
+                    const conditions = prevMetadata.primaryColumns
+                        .map((pk) => {
+                            const ancestorPk =
+                                ancestorMetadata.primaryColumns.find(
+                                    (apk) =>
+                                        apk.propertyName === pk.propertyName,
+                                )
+                            if (!ancestorPk) return ""
+                            return (
+                                this.escape(ancestorAlias) +
+                                "." +
+                                this.escape(ancestorPk.databaseName) +
+                                " = " +
+                                this.escape(prevAlias) +
+                                "." +
+                                this.escape(pk.databaseName)
+                            )
+                        })
+                        .filter((c) => c)
+                        .join(" AND ")
+
+                    ctiJoinSql +=
+                        " INNER JOIN " +
+                        ancestorTable +
+                        " " +
+                        this.escape(ancestorAlias) +
+                        this.createTableLockExpression() +
+                        " ON " +
+                        conditions
+                    prevAlias = ancestorAlias
+                }
+            }
+            // CTI parent: do NOT LEFT JOIN child tables.
+            // Root entity queries return only root-table data (id, type,
+            // shared columns). Child-specific columns are accessed by
+            // querying the child entity directly (findOne(User, ...)).
+            // This follows SQLAlchemy's approach: parent table is not an
+            // umbrella — it's a standalone entity.
+        }
+
+        // Helper: build CTI ancestor JOINs for a joined entity that is a CTI child.
+        // Returns SQL fragment or empty string. Must be appended immediately after the
+        // child table's own JOIN to ensure correct ordering (other joins may reference
+        // the __cti_parent alias via inherited relation columns).
+        const buildCtiParentJoins = (joinAttr: JoinAttribute): string => {
+            if (!joinAttr.alias.hasMetadata) return ""
+            const joinedMetadata = joinAttr.alias.metadata
+            if (!joinedMetadata.isCtiChild) return ""
+
+            const joinedAlias = joinAttr.alias.name
+            const joinDirection =
+                joinAttr.direction === "LEFT" ? "LEFT" : "INNER"
+            const ancestorChain = joinedMetadata.ctiAncestorChain
+            let ctiSql = ""
+            let prevAlias = joinedAlias
+            for (let i = 0; i < ancestorChain.length; i++) {
+                const ancestorMetadata = ancestorChain[i]
+                const ancestorAlias = ctiAncestorAlias(
+                    this.connection.driver,
+                    joinedAlias,
+                    i,
+                )
+                const ancestorTable = this.getTableName(
+                    ancestorMetadata.tablePath,
+                )
+
+                const prevMetadata =
+                    i === 0 ? joinedMetadata : ancestorChain[i - 1]
+                const conditions = prevMetadata.primaryColumns
+                    .map((pk) => {
+                        const ancestorPk =
+                            ancestorMetadata.primaryColumns.find(
+                                (apk) =>
+                                    apk.propertyName === pk.propertyName,
+                            )
+                        if (!ancestorPk) return ""
+                        return (
+                            this.escape(ancestorAlias) +
+                            "." +
+                            this.escape(ancestorPk.databaseName) +
+                            " = " +
+                            this.escape(prevAlias) +
+                            "." +
+                            this.escape(pk.databaseName)
+                        )
+                    })
+                    .filter((c) => c)
+                    .join(" AND ")
+
+                ctiSql +=
+                    ` ${joinDirection} JOIN ` +
+                    ancestorTable +
+                    " " +
+                    this.escape(ancestorAlias) +
+                    this.createTableLockExpression() +
+                    " ON " +
+                    conditions
+                prevAlias = ancestorAlias
+            }
+            return ctiSql
+        }
+
         const joins = this.expressionMap.joinAttributes.map((joinAttr) => {
             const relation = joinAttr.relation
             const destinationTableName = joinAttr.tablePath
@@ -2274,7 +2416,8 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                     this.createTableLockExpression() +
                     (joinAttr.condition
                         ? " ON " + this.replacePropertyNames(joinAttr.condition)
-                        : "")
+                        : "") +
+                    buildCtiParentJoins(joinAttr)
                 )
             }
 
@@ -2306,7 +2449,8 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                     this.escape(destinationTableAlias) +
                     this.createTableLockExpression() +
                     " ON " +
-                    this.replacePropertyNames(condition + appendedCondition)
+                    this.replacePropertyNames(condition + appendedCondition) +
+                    buildCtiParentJoins(joinAttr)
                 )
             } else if (relation.isOneToMany || relation.isOneToOneNotOwner) {
                 // JOIN `post` `post` ON `post`.`categoryId` = `category`.`id`
@@ -2315,7 +2459,8 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                         if (
                             relation.inverseEntityMetadata.tableType ===
                                 "entity-child" &&
-                            relation.inverseEntityMetadata.discriminatorColumn
+                            relation.inverseEntityMetadata.discriminatorColumn &&
+                            !relation.inverseEntityMetadata.isCtiChild
                         ) {
                             appendedCondition +=
                                 " AND " +
@@ -2352,7 +2497,8 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                     this.escape(destinationTableAlias) +
                     this.createTableLockExpression() +
                     " ON " +
-                    this.replacePropertyNames(condition + appendedCondition)
+                    this.replacePropertyNames(condition + appendedCondition) +
+                    buildCtiParentJoins(joinAttr)
                 )
             } else {
                 // means many-to-many
@@ -2447,12 +2593,13 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                     " ON " +
                     this.replacePropertyNames(
                         destinationCondition + appendedCondition,
-                    )
+                    ) +
+                    buildCtiParentJoins(joinAttr)
                 )
             }
         })
 
-        return joins.join(" ")
+        return ctiJoinSql + joins.join(" ")
     }
 
     /**
@@ -2790,12 +2937,42 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
         const finalSelects: SelectQuery[] = []
 
         const escapedAliasName = this.escape(aliasName)
+        // For CTI children with multi-level inheritance, build a map from ancestor
+        // entityMetadata → escaped alias name so each inherited column routes to its
+        // owning ancestor's table alias.
+        let ctiAncestorAliasMap: Map<EntityMetadata, string> | null = null
+        if (metadata.isCtiChild && metadata.inheritedColumns.length > 0) {
+            const chain = metadata.ctiAncestorChain
+            ctiAncestorAliasMap = new Map()
+            for (let i = 0; i < chain.length; i++) {
+                ctiAncestorAliasMap.set(
+                    chain[i],
+                    this.escape(ctiAncestorAlias(this.connection.driver, aliasName, i)),
+                )
+            }
+        }
+
         allColumns.forEach((column) => {
+            // Determine which table alias to use for the column source.
+            // CTI inherited columns route to the ancestor that owns them.
+            let columnTableAlias = escapedAliasName
+            if (
+                ctiAncestorAliasMap !== null &&
+                metadata.inheritedColumnsSet.has(column)
+            ) {
+                const ownerAlias = ctiAncestorAliasMap.get(
+                    column.entityMetadata,
+                )
+                if (ownerAlias) {
+                    columnTableAlias = ownerAlias
+                }
+            }
+
             let selectionPath =
-                escapedAliasName + "." + this.escape(column.databaseName)
+                columnTableAlias + "." + this.escape(column.databaseName)
 
             if (column.isVirtualProperty && column.query) {
-                selectionPath = `(${column.query(escapedAliasName)})`
+                selectionPath = `(${column.query(columnTableAlias)})`
             }
 
             if (
@@ -2857,6 +3034,12 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                 })
             }
         })
+
+        // CTI parent: do NOT select child-specific columns.
+        // Root entity queries return only root-table data.
+        // Child-specific columns are accessed by querying the child
+        // entity directly (e.g., findOne(User, ...)).
+
         return finalSelects
     }
 
@@ -3529,6 +3712,15 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                     entities,
                 )
             }
+
+            // For CTI parent queries, load child-specific eager relations
+            // via follow-up batched queries (the main query only JOINs parent's
+            // own eager relations; child-specific ones are unknown until the
+            // discriminator identifies child types in the result set).
+            // CTI parent: do NOT load child-specific eager relations.
+            // Root entity queries return only root-table data and
+            // root-level relations. Child-specific eager relations are
+            // loaded when querying the child entity directly.
         }
 
         if (this.expressionMap.relationLoadStrategy === "query") {
@@ -3603,6 +3795,86 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
         return {
             raw: rawResults,
             entities: entities,
+        }
+    }
+
+    /**
+     * For CTI parent polymorphic queries, loads child-specific eager relations
+     * via follow-up batched queries. Groups entities by child type, then for
+     * each child type loads its eager relations that are not on the parent.
+     */
+    protected async loadCtiChildEagerRelations(
+        entities: any[],
+        queryRunner: QueryRunner,
+    ): Promise<void> {
+        const parentMetadata = this.expressionMap.mainAlias!.metadata
+        const parentEagerProps = new Set(
+            parentMetadata.eagerRelations.map((r) => r.propertyName),
+        )
+
+        // Group entities by their leaf (most-derived) entity metadata
+        const groupedByChild = new Map<EntityMetadata, any[]>()
+        for (const entity of entities) {
+            const leafMeta = this.connection.entityMetadatas.find(
+                (m) => m.target === entity.constructor,
+            )
+            if (!leafMeta || leafMeta === parentMetadata) continue
+
+            const group = groupedByChild.get(leafMeta)
+            if (group) {
+                group.push(entity)
+            } else {
+                groupedByChild.set(leafMeta, [entity])
+            }
+        }
+
+        // For each child type, batch-load its child-specific eager relations
+        const loadPromises: Promise<void>[] = []
+
+        for (const [childMeta, childEntities] of groupedByChild) {
+            const childEagerRelations = childMeta.eagerRelations.filter(
+                (r) => !parentEagerProps.has(r.propertyName),
+            )
+
+            for (const relation of childEagerRelations) {
+                loadPromises.push(
+                    (async () => {
+                        // Build a queryBuilder that carries the current queryRunner
+                        // so follow-up queries stay within the same transaction context.
+                        const relationAlias =
+                            relation.inverseEntityMetadata.targetName
+                        const childQb = this.createQueryBuilder()
+                            .select(relationAlias)
+                            .from(
+                                relation.inverseEntityMetadata.target,
+                                relationAlias,
+                            )
+                        const relatedGroups =
+                            await this.connection.relationIdLoader.loadManyToManyRelationIdsAndGroup(
+                                relation,
+                                childEntities,
+                                undefined,
+                                childQb,
+                            )
+                        for (const entity of childEntities) {
+                            const group = relatedGroups.find(
+                                (g) => g.entity === entity,
+                            )
+                            if (group) {
+                                const value =
+                                    group.related === undefined
+                                        ? null
+                                        : group.related
+                                relation.setEntityValue(entity, value)
+                            }
+                        }
+                    })(),
+                )
+            }
+        }
+
+        if (loadPromises.length > 0) {
+            await Promise.all(loadPromises)
         }
     }
 

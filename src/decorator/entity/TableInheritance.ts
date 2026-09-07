@@ -6,7 +6,7 @@ import { ColumnOptions } from "../options/ColumnOptions"
  * Sets for entity to use table inheritance pattern.
  */
 export function TableInheritance(options?: {
-    pattern?: "STI" /*|"CTI"*/
+    pattern?: "STI" | "CTI"
     column?: string | ColumnOptions
 }): ClassDecorator {
     return function (target: Function) {

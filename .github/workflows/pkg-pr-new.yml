@@ -1,23 +1,25 @@
 name: Publish Preview Package
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - fix/sti-child-relation-scoping-0.3.13
+      - feat/class-table-inheritance-0.3.13
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
 
       - run: npm ci
 
-      - run: npm run compile
+      - name: Build package
+        run: npm run package
 
-      - run: npx pkg-pr-new publish --publicize
+      - run: npx pkg-pr-new publish './build/package' --publicize

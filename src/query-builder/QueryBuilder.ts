@@ -23,6 +23,7 @@ import { NotBrackets } from "./NotBrackets"
 import { EntityPropertyNotFoundError } from "../error/EntityPropertyNotFoundError"
 import { ReturningType } from "../driver/Driver"
 import { OracleDriver } from "../driver/oracle/OracleDriver"
+import { DriverUtils } from "../driver/DriverUtils"
 import { InstanceChecker } from "../util/InstanceChecker"
 import { escapeRegExp } from "../util/escapeRegExp"
 
@@ -717,6 +718,38 @@ export abstract class QueryBuilder<Entity extends ObjectLiteral> {
 
             const replacements: { [key: string]: string } = {}
 
+            // For CTI children with multi-level inheritance, map each inherited property
+            // name to the escaped alias prefix of the ancestor that owns it.
+            // This is needed so that e.g. u.name routes to the Actor table alias
+            // while u.reputation routes to the Contributor table alias.
+            const inheritedPropertyToAliasPrefix:
+                | Map<string, string>
+                | undefined =
+                alias.metadata.isCtiChild &&
+                alias.metadata.inheritedColumns.length > 0 &&
+                this.expressionMap.aliasNamePrefixingEnabled
+                    ? new Map<string, string>()
+                    : undefined
+
+            // Build ancestor alias map for CTI children
+            let ctiAncestorAliasMap: Map<EntityMetadata, string> | undefined
+            if (inheritedPropertyToAliasPrefix) {
+                const chain = alias.metadata.ctiAncestorChain
+                ctiAncestorAliasMap = new Map()
+                for (let i = 0; i < chain.length; i++) {
+                    const ancestorAlias =
+                        DriverUtils.buildCtiAncestorAlias(
+                            this.connection.driver,
+                            alias.name,
+                            i,
+                        )
+                    ctiAncestorAliasMap.set(
+                        chain[i],
+                        `${this.escape(ancestorAlias)}.`,
+                    )
+                }
+            }
+
             // Insert & overwrite the replacements from least to most relevant in our replacements object.
             // To do this we iterate and overwrite in the order of relevance.
             // Least to Most Relevant:
@@ -746,14 +779,53 @@ export abstract class QueryBuilder<Entity extends ObjectLiteral> {
 
             for (const column of alias.metadata.columns) {
                 replacements[column.databaseName] = column.databaseName
+                if (
+                    inheritedPropertyToAliasPrefix &&
+                    alias.metadata.inheritedColumnsSet.has(column)
+                ) {
+                    const prefix = ctiAncestorAliasMap?.get(
+                        column.entityMetadata,
+                    )
+                    if (prefix)
+                        inheritedPropertyToAliasPrefix.set(
+                            column.databaseName,
+                            prefix,
+                        )
+                }
             }
 
             for (const column of alias.metadata.columns) {
                 replacements[column.propertyName] = column.databaseName
+                if (
+                    inheritedPropertyToAliasPrefix &&
+                    alias.metadata.inheritedColumnsSet.has(column)
+                ) {
+                    const prefix = ctiAncestorAliasMap?.get(
+                        column.entityMetadata,
+                    )
+                    if (prefix)
+                        inheritedPropertyToAliasPrefix.set(
+                            column.propertyName,
+                            prefix,
+                        )
+                }
             }
 
             for (const column of alias.metadata.columns) {
                 replacements[column.propertyPath] = column.databaseName
+                if (
+                    inheritedPropertyToAliasPrefix &&
+                    alias.metadata.inheritedColumnsSet.has(column)
+                ) {
+                    const prefix = ctiAncestorAliasMap?.get(
+                        column.entityMetadata,
+                    )
+                    if (prefix)
+                        inheritedPropertyToAliasPrefix.set(
+                            column.propertyPath,
+                            prefix,
+                        )
+                }
             }
 
             statement = statement.replace(
@@ -770,7 +842,11 @@ export abstract class QueryBuilder<Entity extends ObjectLiteral> {
                 ),
                 (match, pre, p) => {
                     if (replacements[p]) {
-                        return `${pre}${replacementAliasNamePrefix}${this.escape(
+                        // For CTI children, inherited columns route to the correct ancestor alias
+                        const prefix =
+                            inheritedPropertyToAliasPrefix?.get(p) ??
+                            replacementAliasNamePrefix
+                        return `${pre}${prefix}${this.escape(
                             replacements[p],
                         )}`
                     }
@@ -842,16 +918,48 @@ export abstract class QueryBuilder<Entity extends ObjectLiteral> {
             }
 
             if (metadata.discriminatorColumn && metadata.parentEntityMetadata) {
-                const column = this.expressionMap.aliasNamePrefixingEnabled
-                    ? this.expressionMap.mainAlias!.name +
-                      "." +
-                      metadata.discriminatorColumn.databaseName
-                    : metadata.discriminatorColumn.databaseName
+                // For CTI children, discriminator lives on the root ancestor table.
+                // In SELECT queries, the ancestor is JOINed so we can reference it.
+                // In UPDATE/DELETE, there's no JOIN — skip the discriminator condition
+                // (the child table only contains rows of that type, PK is sufficient).
+                if (metadata.isCtiChild) {
+                    if (this.expressionMap.queryType === "select") {
+                        // Find the root ancestor alias (last in the chain)
+                        const ancestorChain = metadata.ctiAncestorChain
+                        const rootIndex = ancestorChain.length - 1
+                        const rootAliasName =
+                            DriverUtils.buildCtiAncestorAlias(
+                                this.connection.driver,
+                                this.expressionMap.mainAlias!.name,
+                                rootIndex,
+                            )
 
-                const condition = `${this.replacePropertyNames(
-                    column,
-                )} IN (:...discriminatorColumnValues)`
-                conditionsArray.push(condition)
+                        const column = this.expressionMap
+                            .aliasNamePrefixingEnabled
+                            ? this.escape(rootAliasName) +
+                              "." +
+                              this.escape(
+                                  metadata.discriminatorColumn.databaseName,
+                              )
+                            : this.escape(
+                                  metadata.discriminatorColumn.databaseName,
+                              )
+
+                        const condition = `${column} IN (:...discriminatorColumnValues)`
+                        conditionsArray.push(condition)
+                    }
+                } else {
+                    // STI: discriminator on same table
+                    let column = this.expressionMap.aliasNamePrefixingEnabled
+                        ? this.expressionMap.mainAlias!.name +
+                          "." +
+                          metadata.discriminatorColumn.databaseName
+                        : metadata.discriminatorColumn.databaseName
+                    column = this.replacePropertyNames(column)
+
+                    const condition = `${column} IN (:...discriminatorColumnValues)`
+                    conditionsArray.push(condition)
+                }
             }
         }
 

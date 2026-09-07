@@ -46,8 +46,22 @@ export class RawSqlResultsToEntityTransformer {
     transform(rawResults: any[], alias: Alias): any[] {
         const group = this.group(rawResults, alias)
         const entities: any[] = []
+
+        // Build discriminator value → child metadata map once for O(1) lookups
+        let discriminatorMap: Map<any, EntityMetadata> | undefined
+        if (alias.metadata.discriminatorColumn) {
+            discriminatorMap = new Map()
+            for (const child of alias.metadata.childEntityMetadatas) {
+                discriminatorMap.set(child.discriminatorValue, child)
+            }
+        }
+
         group.forEach((results) => {
-            const entity = this.transformRawResultsGroup(results, alias)
+            const entity = this.transformRawResultsGroup(
+                results,
+                alias,
+                discriminatorMap,
+            )
             if (
                 entity !== undefined &&
                 !Object.values(entity).every((value) => value === null)
@@ -121,32 +135,46 @@ export class RawSqlResultsToEntityTransformer {
     protected transformRawResultsGroup(
         rawResults: any[],
         alias: Alias,
+        discriminatorMap?: Map<any, EntityMetadata>,
     ): ObjectLiteral | undefined {
         // let hasColumns = false; // , hasEmbeddedColumns = false, hasParentColumns = false, hasParentEmbeddedColumns = false;
         let metadata = alias.metadata
 
         if (metadata.discriminatorColumn) {
-            const discriminatorValues = rawResults.map(
-                (result) =>
-                    result[
-                        DriverUtils.buildAlias(
-                            this.driver,
-                            alias.name,
-                            alias.metadata.discriminatorColumn!.databaseName,
-                        )
-                    ],
+            const aliasedColumnName = DriverUtils.buildAlias(
+                this.driver,
+                alias.name,
+                alias.metadata.discriminatorColumn!.databaseName,
             )
-            const discriminatorMetadata = metadata.childEntityMetadatas.find(
-                (childEntityMetadata) => {
-                    return (
-                        typeof discriminatorValues.find(
-                            (value) =>
-                                value ===
-                                childEntityMetadata.discriminatorValue,
-                        ) !== "undefined"
+            // Find discriminator value from raw results
+            let discriminatorMetadata: EntityMetadata | undefined
+            if (discriminatorMap) {
+                // O(1) lookup using pre-built map
+                for (const result of rawResults) {
+                    const value = result[aliasedColumnName]
+                    if (value !== undefined && value !== null) {
+                        discriminatorMetadata = discriminatorMap.get(value)
+                        if (discriminatorMetadata) break
+                    }
+                }
+            } else {
+                // Fallback for direct calls without map
+                const discriminatorValues = rawResults.map(
+                    (result) => result[aliasedColumnName],
+                )
+                discriminatorMetadata =
+                    metadata.childEntityMetadatas.find(
+                        (childEntityMetadata) => {
+                            return (
+                                typeof discriminatorValues.find(
+                                    (value) =>
+                                        value ===
+                                        childEntityMetadata.discriminatorValue,
+                                ) !== "undefined"
+                            )
+                        },
                     )
-                },
-            )
+            }
             if (discriminatorMetadata) metadata = discriminatorMetadata
         }
         let entity: any = metadata.create(this.queryRunner, {
@@ -217,15 +245,64 @@ export class RawSqlResultsToEntityTransformer {
             )
                 return
 
+            // For CTI parent queries where metadata resolved to a child type,
+            // child-specific columns are aliased with the child table alias
+            // (e.g., "Actor__cti_child_User") to avoid collisions between
+            // same-named columns across different child tables.
+            // Columns defined on the queried entity or its ancestors use the
+            // main alias; columns from child entities use the child alias.
+            //
+            // A column is a "main column" (lives on the parent table) if the
+            // parent metadata has a column with the same databaseName and
+            // propertyPath. We match by properties rather than reference
+            // because CTI children may have their own column objects (e.g.,
+            // PK columns) that differ from the parent's even though they
+            // represent the same physical column. This also correctly handles
+            // columns inherited from abstract base classes whose column.target
+            // is the abstract class rather than the CTI root.
+            let columnAliasName = alias.name
+            if (alias.metadata.isCtiParent && metadata.isCtiChild) {
+                const isMainColumn = alias.metadata.columns.some(
+                    (c) =>
+                        c.databaseName === column.databaseName &&
+                        c.propertyPath === column.propertyPath,
+                )
+                if (!isMainColumn) {
+                    const columnTarget = column.target as Function
+                    const owningChild =
+                        alias.metadata.childEntityMetadatas.find(
+                            (cm) => cm.target === columnTarget,
+                        )
+                    columnAliasName = owningChild
+                        ? DriverUtils.buildCtiChildAlias(
+                              this.driver,
+                              alias.name,
+                              owningChild.targetName,
+                          )
+                        : DriverUtils.buildCtiChildAlias(
+                              this.driver,
+                              alias.name,
+                              metadata.targetName,
+                          )
+                }
+            }
             const value =
                 rawResults[0][
                     DriverUtils.buildAlias(
                         this.driver,
-                        alias.name,
+                        columnAliasName,
                         column.databaseName,
                     )
                 ]
-            if (value === undefined || column.isVirtual) return
+            if (
+                value === undefined ||
+                (column.isVirtual &&
+                    !(
+                        column.isDiscriminator &&
+                        column.entityMetadata.inheritancePattern === "CTI"
+                    ))
+            )
+                return
 
             // if user does not selected the whole entity or he used partial selection and does not select this particular column
             // then we don't add this column and its value into the entity
